@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 from pathlib import Path
+import sys
 
 import torch
 import yaml
@@ -9,8 +10,12 @@ from PIL import Image
 import numpy as np
 from torch.utils.data import DataLoader, Dataset
 
-from src.engine import TrainingConfig, train_step
-from src.models import UNetDualHead
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+from src.engine import TrainingConfig, train_step  # noqa: E402
+from src.models import UNetDualHead  # noqa: E402
 
 
 class LineartDataset(Dataset):
@@ -29,14 +34,19 @@ class LineartDataset(Dataset):
 
         self.samples: list[tuple[Path, Path, Path]] = []
         for image_path in sorted(p for p in self.image_dir.iterdir() if p.is_file()):
-            interior_path = self.interior_dir / image_path.name
-            seed_path = self.seed_dir / image_path.name
+            ext = image_path.suffix.lstrip(".").lower()
+            if not ext:
+                continue
+            target_stem = f"{image_path.stem}__{ext}"
+            interior_path = self.interior_dir / f"{target_stem}_interior.png"
+            seed_path = self.seed_dir / f"{target_stem}_seed_heatmap.png"
             if interior_path.exists() and seed_path.exists():
                 self.samples.append((image_path, interior_path, seed_path))
 
         if not self.samples:
             raise RuntimeError(
                 "No paired samples found. Ensure images/interior_masks/seed_heatmaps share identical filenames."
+                " Expected labels like: <name>__<ext>_interior.png and <name>__<ext>_seed_heatmap.png"
             )
 
     def __len__(self) -> int:
