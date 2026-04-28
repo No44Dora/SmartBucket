@@ -21,3 +21,11 @@ data:
 # 训练轮数
 train:
   epochs: 1
+
+# 使用说明
+# 1) 直接使用默认配置启动训练：
+#    python scripts/train.py --config configs/train_256.yaml
+# 2) 建议先按需修改 data.batch_size、data.image_size 与 train.epochs，
+#    再执行训练命令，以匹配机器显存与训练时长预期。
+# 3) 如需调整损失权重，可修改 loss 下的 lambda_interior /
+#    lambda_seed / alpha 参数后重新运行训练。
