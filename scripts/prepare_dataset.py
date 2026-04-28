@@ -85,11 +85,15 @@ def quantize_colors_kmeans(image_rgb: np.ndarray, k: int) -> tuple[np.ndarray, n
 
     lab = cv2.cvtColor(image_rgb, cv2.COLOR_RGB2LAB)
     pixels = lab.reshape(-1, 3).astype(np.float32)
+    num_samples = int(pixels.shape[0])
+    if k < 1:
+        raise ValueError(f"--num-clusters 必须 >= 1，当前值: {k}")
+    effective_k = min(k, num_samples)
 
     criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 30, 0.2)
     _compactness, labels, centers = cv2.kmeans(
         data=pixels,
-        K=max(2, k),
+        K=effective_k,
         bestLabels=None,
         criteria=criteria,
         attempts=5,
@@ -268,7 +272,9 @@ def process_one_image(path: Path, output_dir: Path, cfg: PreprocessConfig, max_i
     # 5) 每个连通块分配一个 region ID
     region_map = build_region_instances(merged_labels, cfg.min_region_area)
 
-    stem_out = output_dir / path.stem
+    # 将后缀编码进输出名前缀，避免同 stem 不同后缀时互相覆盖（如 scene.png / scene.jpg）。
+    safe_suffix = path.suffix.lower().lstrip(".") or "nosuffix"
+    stem_out = output_dir / f"{path.stem}__{safe_suffix}"
     output_dir.mkdir(parents=True, exist_ok=True)
 
     # 以 uint16 保存实例 ID（常见 8-bit 不足以承载大量区域 ID）。
