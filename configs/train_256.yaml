@@ -1,0 +1,31 @@
+# 模型结构配置（按需求固定为 32/64/128/256 + bottleneck 512）
+model:
+  in_channels: 1      # 单通道线稿输入
+
+# 损失函数配置
+loss:
+  lambda_interior: 1.0
+  lambda_seed: 1.0
+  alpha: 3.0          # weighted MSE 的中心区域权重系数
+
+# 优化器配置
+optim:
+  lr: 0.001
+
+# 数据配置（当前为占位数据集参数）
+data:
+  image_size: 512
+  batch_size: 2
+  size: 8
+
+# 训练轮数
+train:
+  epochs: 1
+
+# 使用说明
+# 1) 直接使用默认配置启动训练：
+#    python scripts/train.py --config configs/train_256.yaml
+# 2) 建议先按需修改 data.batch_size、data.image_size 与 train.epochs，
+#    再执行训练命令，以匹配机器显存与训练时长预期。
+# 3) 如需调整损失权重，可修改 loss 下的 lambda_interior /
+#    lambda_seed / alpha 参数后重新运行训练。
