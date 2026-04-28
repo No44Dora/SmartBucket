@@ -18,10 +18,10 @@ class PreprocessConfig:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Pre-crop and resize images for model training input size.",
+        description="Crop and resize raw color images to fixed-size training inputs.",
     )
-    parser.add_argument("--input-dir", type=Path, required=True, help="Input image folder")
-    parser.add_argument("--output-dir", type=Path, required=True, help="Output image folder")
+    parser.add_argument("--input-dir", type=Path, required=True, help="Raw color image folder")
+    parser.add_argument("--output-dir", type=Path, required=True, help="Output folder of resized/cropped color images")
     parser.add_argument("--target-size", type=int, default=256, help="Output square size")
     parser.add_argument(
         "--square-tolerance",
@@ -33,7 +33,7 @@ def parse_args() -> argparse.Namespace:
         "--foreground-threshold",
         type=int,
         default=245,
-        help="Pixel value threshold for foreground extraction in grayscale",
+        help="Foreground threshold used when detecting main subject",
     )
     parser.add_argument(
         "--bbox-margin-ratio",
@@ -86,10 +86,8 @@ def fit_crop_to_square(
     height: int,
 ) -> tuple[int, int, int, int]:
     x1, y1, x2, y2 = bbox
-    bw = x2 - x1 + 1
-    bh = y2 - y1 + 1
+    side = max(x2 - x1 + 1, y2 - y1 + 1)
 
-    side = max(bw, bh)
     cx = (x1 + x2) // 2
     cy = (y1 + y2) // 2
 
@@ -97,16 +95,10 @@ def fit_crop_to_square(
     ny1 = clamp(cy - side // 2, 0, max(0, height - side))
     nx2 = clamp(nx1 + side - 1, 0, width - 1)
     ny2 = clamp(ny1 + side - 1, 0, height - 1)
-
-    if nx2 - nx1 + 1 < side:
-        nx1 = max(0, nx2 - side + 1)
-    if ny2 - ny1 + 1 < side:
-        ny1 = max(0, ny2 - side + 1)
-
     return nx1, ny1, nx2, ny2
 
 
-def preprocess_image(image: Image.Image, cfg: PreprocessConfig) -> Image.Image:
+def preprocess_color_image(image: Image.Image, cfg: PreprocessConfig) -> Image.Image:
     width, height = image.size
     ratio = width / height
 
@@ -123,20 +115,14 @@ def preprocess_image(image: Image.Image, cfg: PreprocessConfig) -> Image.Image:
         crop_box = (x1, y1, x1 + side, y1 + side)
     else:
         expanded = expand_bbox(bbox, width, height, cfg.bbox_margin_ratio)
-        square_bbox = fit_crop_to_square(expanded, width, height)
-        x1, y1, x2, y2 = square_bbox
+        x1, y1, x2, y2 = fit_crop_to_square(expanded, width, height)
         crop_box = (x1, y1, x2 + 1, y2 + 1)
 
-    cropped = image.crop(crop_box)
-    return cropped.resize((cfg.target_size, cfg.target_size), Image.Resampling.BICUBIC)
+    return image.crop(crop_box).resize((cfg.target_size, cfg.target_size), Image.Resampling.BICUBIC)
 
 
 def iter_images(input_dir: Path, suffixes: set[str]) -> list[Path]:
-    files = [
-        p
-        for p in input_dir.rglob("*")
-        if p.is_file() and p.suffix.lower() in suffixes
-    ]
+    files = [p for p in input_dir.rglob("*") if p.is_file() and p.suffix.lower() in suffixes]
     return sorted(files)
 
 
@@ -149,27 +135,25 @@ def main() -> None:
         bbox_margin_ratio=args.bbox_margin_ratio,
     )
 
-    input_dir = args.input_dir
-    output_dir = args.output_dir
     suffixes = {s.lower() for s in args.suffixes}
+    image_paths = iter_images(args.input_dir, suffixes)
 
-    image_paths = iter_images(input_dir, suffixes)
-    output_dir.mkdir(parents=True, exist_ok=True)
+    args.output_dir.mkdir(parents=True, exist_ok=True)
 
     if not image_paths:
-        print(f"[WARN] No images found in: {input_dir}")
+        print(f"[WARN] No images found in: {args.input_dir}")
         return
 
     for src_path in image_paths:
-        rel_path = src_path.relative_to(input_dir)
-        dst_path = output_dir / rel_path
-        dst_path.parent.mkdir(parents=True, exist_ok=True)
+        rel = src_path.relative_to(args.input_dir)
+        dst = args.output_dir / rel
+        dst.parent.mkdir(parents=True, exist_ok=True)
 
-        image = Image.open(src_path).convert("RGB")
-        processed = preprocess_image(image, cfg)
-        processed.save(dst_path)
+        color = Image.open(src_path).convert("RGB")
+        color_processed = preprocess_color_image(color, cfg)
+        color_processed.save(dst)
 
-    print(f"[INFO] Processed {len(image_paths)} images to {output_dir}")
+    print(f"[INFO] Processed {len(image_paths)} raw color images.")
 
 
 if __name__ == "__main__":
