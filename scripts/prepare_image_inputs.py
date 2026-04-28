@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import argparse
+import os
 from dataclasses import dataclass
 from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor
 
 import numpy as np
 from PIL import Image
@@ -47,6 +49,12 @@ def parse_args() -> argparse.Namespace:
         nargs="+",
         default=[".png", ".jpg", ".jpeg", ".bmp", ".webp"],
         help="Image suffixes to process",
+    )
+    parser.add_argument(
+        "--num-workers",
+        type=int,
+        default=max(1, (os.cpu_count() or 1)),
+        help="Number of CPU worker threads used for parallel preprocessing",
     )
     return parser.parse_args()
 
@@ -137,6 +145,16 @@ def iter_images(input_dir: Path, suffixes: set[str]) -> list[Path]:
     return sorted(files)
 
 
+def process_single_image(src_path: Path, input_dir: Path, output_dir: Path, cfg: PreprocessConfig) -> None:
+    rel = src_path.relative_to(input_dir)
+    dst = output_dir / rel
+    dst.parent.mkdir(parents=True, exist_ok=True)
+
+    with Image.open(src_path) as color:
+        color_processed = preprocess_color_image(color.convert("RGB"), cfg)
+        color_processed.save(dst)
+
+
 def main() -> None:
     args = parse_args()
     cfg = PreprocessConfig(
@@ -148,6 +166,7 @@ def main() -> None:
 
     suffixes = {s.lower() for s in args.suffixes}
     image_paths = iter_images(args.input_dir, suffixes)
+    num_workers = max(1, args.num_workers)
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -155,16 +174,15 @@ def main() -> None:
         print(f"[WARN] No images found in: {args.input_dir}")
         return
 
-    for src_path in image_paths:
-        rel = src_path.relative_to(args.input_dir)
-        dst = args.output_dir / rel
-        dst.parent.mkdir(parents=True, exist_ok=True)
+    with ThreadPoolExecutor(max_workers=num_workers) as executor:
+        futures = [
+            executor.submit(process_single_image, src_path, args.input_dir, args.output_dir, cfg)
+            for src_path in image_paths
+        ]
+        for future in futures:
+            future.result()
 
-        color = Image.open(src_path).convert("RGB")
-        color_processed = preprocess_color_image(color, cfg)
-        color_processed.save(dst)
-
-    print(f"[INFO] Processed {len(image_paths)} raw color images.")
+    print(f"[INFO] Processed {len(image_paths)} raw color images with {num_workers} workers.")
 
 
 if __name__ == "__main__":
