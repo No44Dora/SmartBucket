@@ -27,7 +27,7 @@ def parse_args() -> argparse.Namespace:
         "--square-tolerance",
         type=float,
         default=0.15,
-        help="Treat image as near-square when abs(w/h - 1) <= tolerance",
+        help="Near-square tolerance; still cropped to square to avoid stretching",
     )
     parser.add_argument(
         "--foreground-threshold",
@@ -87,24 +87,20 @@ def fit_crop_to_square(
 ) -> tuple[int, int, int, int]:
     x1, y1, x2, y2 = bbox
     side = max(x2 - x1 + 1, y2 - y1 + 1)
+    side = min(side, width, height)
 
     cx = (x1 + x2) // 2
     cy = (y1 + y2) // 2
 
     nx1 = clamp(cx - side // 2, 0, max(0, width - side))
     ny1 = clamp(cy - side // 2, 0, max(0, height - side))
-    nx2 = clamp(nx1 + side - 1, 0, width - 1)
-    ny2 = clamp(ny1 + side - 1, 0, height - 1)
+    nx2 = nx1 + side - 1
+    ny2 = ny1 + side - 1
     return nx1, ny1, nx2, ny2
 
 
-def preprocess_color_image(image: Image.Image, cfg: PreprocessConfig) -> Image.Image:
+def build_square_crop_box(image: Image.Image, cfg: PreprocessConfig) -> tuple[int, int, int, int]:
     width, height = image.size
-    ratio = width / height
-
-    if abs(ratio - 1.0) <= cfg.square_tolerance:
-        return image.resize((cfg.target_size, cfg.target_size), Image.Resampling.BICUBIC)
-
     gray = np.array(image.convert("L"))
     bbox = find_foreground_bbox(gray, cfg.foreground_threshold)
 
@@ -112,13 +108,28 @@ def preprocess_color_image(image: Image.Image, cfg: PreprocessConfig) -> Image.I
         side = min(width, height)
         x1 = (width - side) // 2
         y1 = (height - side) // 2
-        crop_box = (x1, y1, x1 + side, y1 + side)
-    else:
-        expanded = expand_bbox(bbox, width, height, cfg.bbox_margin_ratio)
-        x1, y1, x2, y2 = fit_crop_to_square(expanded, width, height)
-        crop_box = (x1, y1, x2 + 1, y2 + 1)
+        return x1, y1, x1 + side, y1 + side
 
-    return image.crop(crop_box).resize((cfg.target_size, cfg.target_size), Image.Resampling.BICUBIC)
+    expanded = expand_bbox(bbox, width, height, cfg.bbox_margin_ratio)
+    x1, y1, x2, y2 = fit_crop_to_square(expanded, width, height)
+
+    # 对接近正方形图片，优先保留更多画面：允许最小边全幅参与裁剪。
+    ratio = width / height
+    if abs(ratio - 1.0) <= cfg.square_tolerance:
+        side = min(width, height)
+        cx = (x1 + x2) // 2
+        cy = (y1 + y2) // 2
+        x1 = clamp(cx - side // 2, 0, max(0, width - side))
+        y1 = clamp(cy - side // 2, 0, max(0, height - side))
+        return x1, y1, x1 + side, y1 + side
+
+    return x1, y1, x2 + 1, y2 + 1
+
+
+def preprocess_color_image(image: Image.Image, cfg: PreprocessConfig) -> Image.Image:
+    crop_box = build_square_crop_box(image, cfg)
+    cropped = image.crop(crop_box)
+    return cropped.resize((cfg.target_size, cfg.target_size), Image.Resampling.BICUBIC)
 
 
 def iter_images(input_dir: Path, suffixes: set[str]) -> list[Path]:
