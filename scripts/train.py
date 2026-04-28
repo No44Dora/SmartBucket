@@ -2,39 +2,74 @@ from __future__ import annotations
 
 import argparse
 from pathlib import Path
+import sys
 
 import torch
 import yaml
+from PIL import Image
+import numpy as np
 from torch.utils.data import DataLoader, Dataset
 
-from src.engine import TrainingConfig, train_step
-from src.models import UNetDualHead
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+from src.engine import TrainingConfig, train_step  # noqa: E402
+from src.models import UNetDualHead  # noqa: E402
 
 
-class DummyLineartDataset(Dataset):
-    """阶段B占位数据集。
+class LineartDataset(Dataset):
+    """读取 processed/train 目录结构下的线稿训练数据。"""
 
-    说明：
-    - 当前仓库尚未接入真实数据流水线（阶段A）
-    - 该数据集仅用于验证模型/损失/训练循环能否跑通
-    """
-
-    def __init__(self, size: int = 16, image_size: int = 256) -> None:
-        self.size = size
+    def __init__(self, root: Path, image_size: int = 512) -> None:
+        self.root = root
         self.image_size = image_size
+        self.image_dir = self.root / "images"
+        self.interior_dir = self.root / "interior_masks"
+        self.seed_dir = self.root / "seed_heatmaps"
+
+        for required in [self.image_dir, self.interior_dir, self.seed_dir]:
+            if not required.exists():
+                raise FileNotFoundError(f"Missing required directory: {required}")
+
+        self.samples: list[tuple[Path, Path, Path]] = []
+        for image_path in sorted(p for p in self.image_dir.iterdir() if p.is_file()):
+            ext = image_path.suffix.lstrip(".").lower()
+            if not ext:
+                continue
+            target_stem = f"{image_path.stem}__{ext}"
+            interior_path = self.interior_dir / f"{target_stem}_interior.png"
+            seed_path = self.seed_dir / f"{target_stem}_seed_heatmap.png"
+            if interior_path.exists() and seed_path.exists():
+                self.samples.append((image_path, interior_path, seed_path))
+
+        if not self.samples:
+            raise RuntimeError(
+                "No paired samples found. Ensure images/interior_masks/seed_heatmaps share identical filenames."
+                " Expected labels like: <name>__<ext>_interior.png and <name>__<ext>_seed_heatmap.png"
+            )
 
     def __len__(self) -> int:
-        return self.size
+        return len(self.samples)
+
+    def _read_gray(self, path: Path, *, nearest: bool) -> np.ndarray:
+        image = Image.open(path).convert("L")
+        resample = Image.NEAREST if nearest else Image.BILINEAR
+        image = image.resize((self.image_size, self.image_size), resample=resample)
+        return np.asarray(image, dtype=np.float32) / 255.0
 
     def __getitem__(self, idx: int) -> dict[str, torch.Tensor]:
-        _ = idx
-        # 模拟单通道线稿输入
-        image = torch.rand(1, self.image_size, self.image_size)
-        # 模拟 interior 二值标签
-        interior = (torch.rand(1, self.image_size, self.image_size) > 0.5).float()
-        # 模拟 seed heatmap（仅在 interior 内有值）
-        seed = torch.rand(1, self.image_size, self.image_size) * interior
-        return {"image": image, "interior": interior, "seed": seed}
+        image_path, interior_path, seed_path = self.samples[idx]
+        image = self._read_gray(image_path, nearest=False)
+        interior = self._read_gray(interior_path, nearest=True)
+        seed = self._read_gray(seed_path, nearest=True)
+        interior = (interior > 0.5).astype(np.float32)
+
+        return {
+            "image": torch.from_numpy(image).unsqueeze(0),
+            "interior": torch.from_numpy(interior).unsqueeze(0),
+            "seed": torch.from_numpy(seed).unsqueeze(0),
+        }
 
 
 def parse_args() -> argparse.Namespace:
@@ -71,12 +106,17 @@ def main() -> None:
 
     optimizer = torch.optim.Adam(model.parameters(), lr=cfg["optim"].get("lr", 1e-3))
 
-    # 当前先使用占位数据，后续替换成真实 LineartDataset
-    dataset = DummyLineartDataset(
-        size=cfg["data"].get("size", 16),
-        image_size=cfg["data"].get("image_size", 256),
+    dataset = LineartDataset(
+        root=Path(cfg["data"]["root"]),
+        image_size=cfg["data"].get("image_size", 512),
     )
-    loader = DataLoader(dataset, batch_size=cfg["data"].get("batch_size", 2), shuffle=True)
+    loader = DataLoader(
+        dataset,
+        batch_size=cfg["data"].get("batch_size", 2),
+        shuffle=True,
+        num_workers=cfg["data"].get("num_workers", 0),
+        pin_memory=cfg["data"].get("pin_memory", False),
+    )
 
     epochs = cfg["train"].get("epochs", 1)
     for epoch in range(epochs):

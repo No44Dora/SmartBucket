@@ -12,15 +12,15 @@ loss:
 optim:
   lr: 0.001
 
-# 数据配置（当前为占位数据集参数）
 data:
+  root: processed/train
   image_size: 512
   batch_size: 2
-  size: 8
+  num_workers: 4
+  pin_memory: true
 
-# 训练轮数
 train:
-  epochs: 1
+  epochs: 120
 
 # 使用说明
 # 1) 直接使用默认配置启动训练：
