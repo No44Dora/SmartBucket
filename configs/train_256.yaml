@@ -27,6 +27,14 @@ test:
   root: processed/test
   vis_dir: outputs/eval_vis
 
+postprocess:
+  interior_threshold: 0.5
+  smooth_kernel_size: 7
+  smooth_sigma: 1.5
+  peak_threshold: 0.4
+  min_distance: 12
+  min_area: 120
+
 # 使用说明
 # 1) 直接使用默认配置启动训练：
 #    python scripts/train.py --config configs/train_256.yaml

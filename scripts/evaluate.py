@@ -15,6 +15,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.models import UNetDualHead  # noqa: E402
+from src.postprocess import run_postprocess  # noqa: E402
 
 
 class LineartTestDataset(Dataset):
@@ -86,6 +87,19 @@ def _to_u8(arr: np.ndarray) -> np.ndarray:
     return np.clip(arr * 255.0, 0, 255).astype(np.uint8)
 
 
+def _random_color_map(label_map: np.ndarray) -> np.ndarray:
+    h, w = label_map.shape
+    color = np.zeros((h, w, 3), dtype=np.uint8)
+    ids = np.unique(label_map)
+    rng = np.random.default_rng(42)
+    for rid in ids:
+        if rid == 0:
+            continue
+        rgb = rng.integers(0, 256, size=3, dtype=np.uint8)
+        color[label_map == rid] = rgb
+    return color
+
+
 def make_vis_row(sample: dict[str, torch.Tensor | str], interior_pred: np.ndarray, seed_pred: np.ndarray) -> Image.Image:
     image = sample["image"].squeeze().numpy()
     interior_gt = sample["interior"].squeeze().numpy()
@@ -104,6 +118,21 @@ def make_vis_row(sample: dict[str, torch.Tensor | str], interior_pred: np.ndarra
     for i, panel in enumerate(panels):
         canvas.paste(panel, (i * w, 0))
     return canvas
+
+
+def save_regions(label_map: np.ndarray, output_dir: Path) -> None:
+    output_dir.mkdir(parents=True, exist_ok=True)
+    Image.fromarray(label_map.astype(np.uint16), mode="I;16").save(output_dir / "region_label_map.png")
+
+    ids = np.unique(label_map)
+    for rid in ids:
+        if rid == 0:
+            continue
+        mask = (label_map == rid).astype(np.uint8) * 255
+        Image.fromarray(mask, mode="L").save(output_dir / f"region_{rid:03d}.png")
+
+    color_map = _random_color_map(label_map)
+    Image.fromarray(color_map, mode="RGB").save(output_dir / "region_random_color.png")
 
 
 def main() -> None:
@@ -127,6 +156,7 @@ def main() -> None:
 
     vis_dir = Path(cfg.get("test", {}).get("vis_dir", "outputs/eval_vis"))
     vis_dir.mkdir(parents=True, exist_ok=True)
+    pp_cfg = cfg.get("postprocess", {})
 
     mse_interior = 0.0
     mse_seed = 0.0
@@ -158,6 +188,29 @@ def main() -> None:
                     seed_np,
                 )
                 row.save(vis_dir / f"{sample['name'][0]}_comparison.png")
+
+                interior_th = pp_cfg.get("interior_threshold", 0.5)
+                smooth_sigma = pp_cfg.get("smooth_sigma", 1.5)
+                smooth_kernel = pp_cfg.get("smooth_kernel_size", 7)
+                peak_threshold = pp_cfg.get("peak_threshold", 0.4)
+                default_min_distance = 8 if image_size <= 256 else 12
+                min_distance = pp_cfg.get("min_distance", default_min_distance)
+                default_min_area = max(20, int(image_size * image_size * 0.0005))
+                min_area = pp_cfg.get("min_area", default_min_area)
+
+                pp_outputs = run_postprocess(
+                    interior_pred=interior_pred,
+                    seed_pred=seed_pred,
+                    interior_threshold=interior_th,
+                    smooth_kernel_size=smooth_kernel,
+                    smooth_sigma=smooth_sigma,
+                    peak_threshold=peak_threshold,
+                    min_distance=min_distance,
+                    min_area=min_area,
+                )
+                label_map = pp_outputs["label_map"][0].cpu().numpy().astype(np.int32)
+                sample_dir = vis_dir / sample["name"][0]
+                save_regions(label_map, sample_dir)
 
     print(f"Samples: {count}")
     print(f"Interior MSE: {mse_interior / max(count, 1):.6f}")
