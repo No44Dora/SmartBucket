@@ -85,19 +85,37 @@ def load_config(path: Path) -> dict:
         return yaml.safe_load(f)
 
 
+def save_checkpoint(
+    *,
+    path: Path,
+    model: UNetDualHead,
+    optimizer: torch.optim.Optimizer,
+    epoch: int,
+    avg_loss: float,
+    config: dict,
+) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    checkpoint = {
+        "epoch": epoch,
+        "avg_loss": avg_loss,
+        "model_state_dict": model.state_dict(),
+        "optimizer_state_dict": optimizer.state_dict(),
+        "config": config,
+    }
+    torch.save(checkpoint, path)
+
+
 def main() -> None:
     args = parse_args()
     cfg = load_config(args.config)
 
     device = torch.device(args.device)
 
-    # 构建模型
     model = UNetDualHead(
         in_channels=cfg["model"].get("in_channels", 1),
         out_channels=1,
     ).to(device)
 
-    # 训练损失权重配置
     train_cfg = TrainingConfig(
         lambda_interior=cfg["loss"].get("lambda_interior", 1.0),
         lambda_seed=cfg["loss"].get("lambda_seed", 1.0),
@@ -119,9 +137,18 @@ def main() -> None:
     )
 
     epochs = cfg["train"].get("epochs", 1)
+    output_dir = Path(cfg["train"].get("output_dir", "outputs/checkpoints"))
+    best_loss = float("inf")
+
     for epoch in range(epochs):
+        running_loss = 0.0
+        num_steps = 0
+
         for step, batch in enumerate(loader):
             metrics = train_step(model, batch, optimizer, train_cfg, device)
+            running_loss += metrics["loss_total"]
+            num_steps += 1
+
             if step % 5 == 0:
                 print(
                     f"epoch={epoch} step={step} "
@@ -129,6 +156,31 @@ def main() -> None:
                     f"interior={metrics['loss_interior']:.4f} "
                     f"seed={metrics['loss_seed']:.4f}"
                 )
+
+        avg_loss = running_loss / max(num_steps, 1)
+        latest_ckpt = output_dir / "latest.pth"
+        save_checkpoint(
+            path=latest_ckpt,
+            model=model,
+            optimizer=optimizer,
+            epoch=epoch,
+            avg_loss=avg_loss,
+            config=cfg,
+        )
+        print(f"Saved checkpoint: {latest_ckpt} (epoch={epoch}, avg_loss={avg_loss:.4f})")
+
+        if avg_loss < best_loss:
+            best_loss = avg_loss
+            best_ckpt = output_dir / "best.pth"
+            save_checkpoint(
+                path=best_ckpt,
+                model=model,
+                optimizer=optimizer,
+                epoch=epoch,
+                avg_loss=avg_loss,
+                config=cfg,
+            )
+            print(f"Updated best checkpoint: {best_ckpt} (best_loss={best_loss:.4f})")
 
 
 if __name__ == "__main__":

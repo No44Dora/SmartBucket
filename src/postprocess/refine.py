@@ -5,6 +5,49 @@ from collections import defaultdict
 import torch
 
 
+def split_disconnected_regions(label_map: torch.Tensor) -> torch.Tensor:
+    """将同一 label 的不连通块拆分并重新编号。"""
+    if label_map.ndim != 3:
+        raise ValueError("label_map should be [N, H, W].")
+
+    out = torch.zeros_like(label_map)
+    n, h, w = out.shape
+
+    for b in range(n):
+        labels = label_map[b]
+        visited = torch.zeros((h, w), dtype=torch.bool, device=label_map.device)
+        next_id = 1
+
+        for y in range(h):
+            for x in range(w):
+                if visited[y, x]:
+                    continue
+                base_label = int(labels[y, x].item())
+                if base_label <= 0:
+                    visited[y, x] = True
+                    continue
+
+                stack = [(y, x)]
+                visited[y, x] = True
+                out[b, y, x] = next_id
+
+                while stack:
+                    cy, cx = stack.pop()
+                    for ny, nx in ((cy - 1, cx), (cy + 1, cx), (cy, cx - 1), (cy, cx + 1)):
+                        if ny < 0 or ny >= h or nx < 0 or nx >= w:
+                            continue
+                        if visited[ny, nx]:
+                            continue
+                        if int(labels[ny, nx].item()) != base_label:
+                            continue
+                        visited[ny, nx] = True
+                        out[b, ny, nx] = next_id
+                        stack.append((ny, nx))
+
+                next_id += 1
+    return out
+
+
 def filter_small_regions(label_map: torch.Tensor, min_area: int = 16) -> torch.Tensor:
     """移除面积小于阈值的小区域（置零）。"""
     if min_area <= 0:

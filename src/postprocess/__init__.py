@@ -1,5 +1,5 @@
 from .peak_extract import extract_peak_mask, peak_mask_to_markers, smooth_heatmap
-from .refine import fill_unassigned_pixels, filter_small_regions, relabel_sequential
+from .refine import fill_unassigned_pixels, filter_small_regions, relabel_sequential, split_disconnected_regions
 from .watershed import watershed_from_markers
 
 
@@ -25,6 +25,7 @@ def run_postprocess(
     markers = peak_mask_to_markers(peak_mask)
     label_map = watershed_from_markers(interior_bin=interior_bin, markers=markers)
     label_map = fill_unassigned_pixels(label_map, interior_bin)
+    label_map = split_disconnected_regions(label_map)
     label_map = filter_small_regions(label_map, min_area=min_area)
     label_map = relabel_sequential(label_map)
 
@@ -45,5 +46,6 @@ __all__ = [
     "fill_unassigned_pixels",
     "filter_small_regions",
     "relabel_sequential",
+    "split_disconnected_regions",
     "run_postprocess",
 ]
