@@ -52,17 +52,28 @@ class LineartDataset(Dataset):
     def __len__(self) -> int:
         return len(self.samples)
 
-    def _read_gray(self, path: Path, *, nearest: bool) -> np.ndarray:
-        image = Image.open(path).convert("L")
+    def _read_gray(self, path: Path, *, nearest: bool, preserve_u16: bool = False) -> np.ndarray:
+        image_pil = Image.open(path)
+        if preserve_u16:
+            image_np = np.asarray(image_pil)
+            if image_np.dtype == np.uint16:
+                image = Image.fromarray(image_np, mode="I;16")
+            else:
+                image = image_pil.convert("L")
+        else:
+            image = image_pil.convert("L")
         resample = Image.NEAREST if nearest else Image.BILINEAR
         image = image.resize((self.image_size, self.image_size), resample=resample)
-        return np.asarray(image, dtype=np.float32) / 255.0
+        image_np = np.asarray(image)
+        if image_np.dtype == np.uint16:
+            return image_np.astype(np.float32) / 65535.0
+        return image_np.astype(np.float32) / 255.0
 
     def __getitem__(self, idx: int) -> dict[str, torch.Tensor]:
         image_path, interior_path, seed_path = self.samples[idx]
         image = self._read_gray(image_path, nearest=False)
         interior = self._read_gray(interior_path, nearest=True)
-        seed = self._read_gray(seed_path, nearest=True)
+        seed = self._read_gray(seed_path, nearest=True, preserve_u16=True)
         interior = (interior > 0.5).astype(np.float32)
 
         return {
