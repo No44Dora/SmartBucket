@@ -28,11 +28,11 @@ test:
   vis_dir: outputs/eval_vis
 
 postprocess:
-  interior_threshold: 0.5
+  interior_threshold: 0.6
   smooth_kernel_size: 7
-  smooth_sigma: 1.5
+  smooth_sigma: 2
   peak_threshold: 0.4
-  min_distance: 12
+  min_distance: 24
   min_area: 120
 
 # 使用说明
