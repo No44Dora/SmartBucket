@@ -68,11 +68,11 @@ def build_interior_map(region_map: np.ndarray) -> np.ndarray:
     if h == 0 or w == 0:
         return np.zeros_like(region_map, dtype=np.uint8)
 
-    # region_id 是整型标签图，先拉伸到 [0, 255]，再走 Canny 流程。
-    region_u8 = cv2.normalize(region_map, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
-    gray = region_u8
-
-    edges = cv2.Canny(gray, 50, 150)
+    # 对离散标签图，直接根据“相邻像素标签是否变化”构造边界，
+    # 避免 normalize + Canny 受标签 ID 数值大小影响而漏检边界。
+    edges = np.zeros((h, w), dtype=np.uint8)
+    edges[:, 1:] |= (region_map[:, 1:] != region_map[:, :-1]).astype(np.uint8) * 255
+    edges[1:, :] |= (region_map[1:, :] != region_map[:-1, :]).astype(np.uint8) * 255
     kernel = np.ones((3, 3), np.uint8)
     edges_dilated = cv2.dilate(edges, kernel, iterations=1)
     edges_closed = cv2.morphologyEx(edges_dilated, cv2.MORPH_CLOSE, kernel)
