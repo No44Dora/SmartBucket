@@ -63,7 +63,40 @@ def read_region_map(path: Path) -> np.ndarray:
 
 
 def build_interior_map(region_map: np.ndarray) -> np.ndarray:
-    return (region_map > 0).astype(np.uint8)
+    """按 Canny -> 加粗/闭运算 -> flood fill 外部 -> 反转 的流程构建粗 interior mask。"""
+    h, w = region_map.shape
+    if h == 0 or w == 0:
+        return np.zeros_like(region_map, dtype=np.uint8)
+
+    # region_id 是整型标签图，先拉伸到 [0, 255]，再走 Canny 流程。
+    region_u8 = cv2.normalize(region_map, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
+    gray = region_u8
+
+    edges = cv2.Canny(gray, 50, 150)
+    kernel = np.ones((3, 3), np.uint8)
+    edges_dilated = cv2.dilate(edges, kernel, iterations=1)
+    edges_closed = cv2.morphologyEx(edges_dilated, cv2.MORPH_CLOSE, kernel)
+
+    # 以边缘为障碍，在非边缘区域做 flood fill，得到 outside。
+    non_edge = (edges_closed == 0).astype(np.uint8)
+    flood_src = (non_edge * 255).astype(np.uint8)
+    flood_mask = np.zeros((h + 2, w + 2), dtype=np.uint8)
+
+    border_seeds: list[tuple[int, int]] = []
+    for x in range(w):
+        border_seeds.append((x, 0))
+        border_seeds.append((x, h - 1))
+    for y in range(h):
+        border_seeds.append((0, y))
+        border_seeds.append((w - 1, y))
+
+    for x, y in border_seeds:
+        if flood_src[y, x] == 255:
+            cv2.floodFill(flood_src, flood_mask, (x, y), 128)
+
+    outside = flood_src == 128
+    interior = ((~outside) & (edges_closed == 0)).astype(np.uint8)
+    return interior
 
 
 def build_seed_heatmap(region_map: np.ndarray) -> np.ndarray:
