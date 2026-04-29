@@ -49,17 +49,28 @@ class LineartTestDataset(Dataset):
     def __len__(self) -> int:
         return len(self.samples)
 
-    def _read_gray(self, path: Path, *, nearest: bool) -> np.ndarray:
-        image = Image.open(path).convert("L")
+    def _read_gray(self, path: Path, *, nearest: bool, preserve_u16: bool = False) -> np.ndarray:
+        image_pil = Image.open(path)
+        if preserve_u16:
+            image_np = np.asarray(image_pil)
+            if image_np.dtype == np.uint16:
+                image = Image.fromarray(image_np, mode="I;16")
+            else:
+                image = image_pil.convert("L")
+        else:
+            image = image_pil.convert("L")
         resample = Image.NEAREST if nearest else Image.BILINEAR
         image = image.resize((self.image_size, self.image_size), resample=resample)
-        return np.asarray(image, dtype=np.float32) / 255.0
+        image_np = np.asarray(image)
+        if image_np.dtype == np.uint16:
+            return image_np.astype(np.float32) / 65535.0
+        return image_np.astype(np.float32) / 255.0
 
     def __getitem__(self, idx: int) -> dict[str, torch.Tensor | str]:
         image_path, interior_path, seed_path = self.samples[idx]
         image = self._read_gray(image_path, nearest=False)
         interior = self._read_gray(interior_path, nearest=True)
-        seed = self._read_gray(seed_path, nearest=True)
+        seed = self._read_gray(seed_path, nearest=True, preserve_u16=True)
 
         return {
             "name": image_path.stem,
@@ -75,6 +86,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--ckpt", type=Path, required=True)
     parser.add_argument("--device", type=str, default="cpu")
     parser.add_argument("--max-vis", type=int, default=8)
+    parser.add_argument(
+        "--save-raw",
+        action="store_true",
+        help="额外保存不做伪彩/后处理的原始 heatmap（16-bit PNG + .npy）。",
+    )
     return parser.parse_args()
 
 
@@ -125,6 +141,22 @@ def save_final_flat_result(label_map: np.ndarray, output_dir: Path) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
     color_map = _random_color_map(label_map)
     Image.fromarray(color_map, mode="RGB").save(output_dir / "final_flat_fill.png")
+
+
+def save_raw_heatmaps(vis_dir: Path, sample_name: str, seed_gt: np.ndarray, seed_pred: np.ndarray) -> None:
+    raw_dir = vis_dir / f"{sample_name}_raw"
+    raw_dir.mkdir(parents=True, exist_ok=True)
+
+    seed_gt_clip = np.clip(seed_gt, 0.0, 1.0)
+    seed_pred_clip = np.clip(seed_pred, 0.0, 1.0)
+
+    seed_gt_u16 = np.round(seed_gt_clip * 65535.0).astype(np.uint16)
+    seed_pred_u16 = np.round(seed_pred_clip * 65535.0).astype(np.uint16)
+
+    Image.fromarray(seed_gt_u16, mode="I;16").save(raw_dir / "seed_gt_raw_u16.png")
+    Image.fromarray(seed_pred_u16, mode="I;16").save(raw_dir / "seed_pred_raw_u16.png")
+    np.save(raw_dir / "seed_gt_raw.npy", seed_gt_clip.astype(np.float32))
+    np.save(raw_dir / "seed_pred_raw.npy", seed_pred_clip.astype(np.float32))
 
 
 def main() -> None:
@@ -180,6 +212,13 @@ def main() -> None:
                     seed_np,
                 )
                 row.save(vis_dir / f"{sample['name'][0]}_comparison.png")
+                if args.save_raw:
+                    save_raw_heatmaps(
+                        vis_dir=vis_dir,
+                        sample_name=sample["name"][0],
+                        seed_gt=sample["seed"][0].squeeze().cpu().numpy(),
+                        seed_pred=seed_np,
+                    )
 
                 interior_th = pp_cfg.get("interior_threshold", 0.5)
                 smooth_sigma = pp_cfg.get("smooth_sigma", 1.5)
