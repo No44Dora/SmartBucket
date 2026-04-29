@@ -63,7 +63,23 @@ def read_region_map(path: Path) -> np.ndarray:
 
 
 def build_interior_map(region_map: np.ndarray) -> np.ndarray:
-    return (region_map > 0).astype(np.uint8)
+    """按 Canny -> 加粗/闭运算 -> flood fill 外部 -> 反转 的流程构建粗 interior mask。"""
+    h, w = region_map.shape
+    if h == 0 or w == 0:
+        return np.zeros_like(region_map, dtype=np.uint8)
+
+    # 对离散标签图，直接根据“相邻像素标签是否变化”构造边界，
+    # 避免 normalize + Canny 受标签 ID 数值大小影响而漏检边界。
+    edges = np.zeros((h, w), dtype=np.uint8)
+    edges[:, 1:] |= (region_map[:, 1:] != region_map[:, :-1]).astype(np.uint8) * 255
+    edges[1:, :] |= (region_map[1:, :] != region_map[:-1, :]).astype(np.uint8) * 255
+    kernel = np.ones((3, 3), np.uint8)
+    edges_dilated = cv2.dilate(edges, kernel, iterations=1)
+    edges_closed = cv2.morphologyEx(edges_dilated, cv2.MORPH_CLOSE, kernel)
+
+    # 按要求不再区分 outside / inside：所有非边缘像素都作为上色区域。
+    interior = (edges_closed == 0).astype(np.uint8)
+    return interior
 
 
 def build_seed_heatmap(region_map: np.ndarray) -> np.ndarray:
