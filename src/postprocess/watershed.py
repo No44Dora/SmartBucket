@@ -34,7 +34,7 @@ def watershed_from_markers(interior_bin: torch.Tensor, markers: torch.Tensor) ->
         valid = interior_bin[b, 0] > 0
         marker_map = markers[b].clone().to(torch.int64)
 
-        labels = torch.zeros((h, w), dtype=torch.int64)
+        labels = torch.zeros((h, w), dtype=torch.int64, device=markers.device)
         labels[marker_map > 0] = marker_map[marker_map > 0]
 
         q: deque[tuple[int, int]] = deque()
