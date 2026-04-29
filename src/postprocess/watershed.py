@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from collections import deque
-
 import torch
 
 
@@ -32,34 +30,32 @@ def watershed_from_markers(interior_bin: torch.Tensor, markers: torch.Tensor) ->
 
     for b in range(n):
         valid = interior_bin[b, 0] > 0
-        marker_map = markers[b].clone().to(torch.int64)
+        labels = markers[b].to(dtype=torch.int64) * valid.to(torch.int64)
 
-        labels = torch.zeros((h, w), dtype=torch.int64)
-        labels[marker_map > 0] = marker_map[marker_map > 0]
+        while True:
+            up = torch.roll(labels, shifts=1, dims=0)
+            up[0, :] = 0
+            down = torch.roll(labels, shifts=-1, dims=0)
+            down[-1, :] = 0
+            left = torch.roll(labels, shifts=1, dims=1)
+            left[:, 0] = 0
+            right = torch.roll(labels, shifts=-1, dims=1)
+            right[:, -1] = 0
 
-        q: deque[tuple[int, int]] = deque()
-        marker_coords = torch.nonzero(marker_map > 0, as_tuple=False)
-        for y, x in marker_coords.tolist():
-            q.append((y, x))
+            neighbors = torch.stack((up, down, left, right), dim=0)
+            positive = neighbors > 0
+            has_neighbor = positive.any(dim=0)
 
-        while q:
-            y, x = q.popleft()
-            src_label = int(labels[y, x].item())
-            if src_label == 0:
-                continue
+            sentinel = torch.full_like(neighbors, fill_value=torch.iinfo(torch.int64).max)
+            min_label = torch.where(positive, neighbors, sentinel).amin(dim=0)
+            max_label = torch.where(positive, neighbors, torch.zeros_like(neighbors)).amax(dim=0)
 
-            for ny, nx in ((y - 1, x), (y + 1, x), (y, x - 1), (y, x + 1)):
-                if ny < 0 or ny >= h or nx < 0 or nx >= w:
-                    continue
-                if not bool(valid[ny, nx]):
-                    continue
+            unlabeled_valid = (labels == 0) & valid
+            assignable = unlabeled_valid & has_neighbor & (min_label == max_label)
+            if not bool(assignable.any()):
+                break
 
-                dst_label = int(labels[ny, nx].item())
-                if dst_label == 0:
-                    labels[ny, nx] = src_label
-                    q.append((ny, nx))
-                elif dst_label != src_label:
-                    labels[ny, nx] = 0
+            labels = torch.where(assignable, min_label, labels)
 
         outputs.append(labels)
 

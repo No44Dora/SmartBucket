@@ -208,8 +208,8 @@ def main() -> None:
                 min_area = pp_cfg.get("min_area", default_min_area)
 
                 pp_outputs = run_postprocess(
-                    interior_pred=interior_pred.cpu(),
-                    seed_pred=seed_pred.cpu(),
+                    interior_pred=interior_pred,
+                    seed_pred=seed_pred,
                     interior_threshold=interior_th,
                     smooth_kernel_size=smooth_kernel,
                     smooth_sigma=smooth_sigma,
