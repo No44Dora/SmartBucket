@@ -4,7 +4,6 @@ import argparse
 from pathlib import Path
 import sys
 
-import cv2
 import numpy as np
 from PIL import Image
 import torch
@@ -122,18 +121,6 @@ def make_vis_row(sample: dict[str, torch.Tensor | str], interior_pred: np.ndarra
 
 
 
-
-def save_heatmap_debug(output_dir: Path, name: str, heatmap: np.ndarray) -> None:
-    output_dir.mkdir(parents=True, exist_ok=True)
-    heatmap_clipped = np.clip(heatmap, 0.0, 1.0)
-    heatmap_u16 = np.round(heatmap_clipped * 65535.0).astype(np.uint16)
-    heatmap_u8 = np.round(heatmap_clipped * 255.0).astype(np.uint8)
-    heatmap_color = cv2.applyColorMap(heatmap_u8, cv2.COLORMAP_TURBO)
-
-    Image.fromarray(heatmap_u16, mode="I;16").save(output_dir / f"{name}_raw_u16.png")
-    Image.fromarray(heatmap_u8, mode="L").save(output_dir / f"{name}_raw_u8.png")
-    Image.fromarray(cv2.cvtColor(heatmap_color, cv2.COLOR_BGR2RGB), mode="RGB").save(output_dir / f"{name}_vis_turbo.png")
-
 def save_final_flat_result(label_map: np.ndarray, output_dir: Path) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
     color_map = _random_color_map(label_map)
@@ -194,10 +181,6 @@ def main() -> None:
                 )
                 row.save(vis_dir / f"{sample['name'][0]}_comparison.png")
 
-                sample_dir = vis_dir / sample["name"][0]
-                save_heatmap_debug(sample_dir, "seed_gt", sample["seed"][0].squeeze().cpu().numpy())
-                save_heatmap_debug(sample_dir, "seed_pred", seed_np)
-
                 interior_th = pp_cfg.get("interior_threshold", 0.5)
                 smooth_sigma = pp_cfg.get("smooth_sigma", 1.5)
                 smooth_kernel = pp_cfg.get("smooth_kernel_size", 7)
@@ -217,9 +200,8 @@ def main() -> None:
                     min_distance=min_distance,
                     min_area=min_area,
                 )
-                save_heatmap_debug(sample_dir, "seed_pred_smooth", pp_outputs["seed_smooth"][0].squeeze().cpu().numpy())
                 label_map = pp_outputs["label_map"][0].cpu().numpy().astype(np.int32)
-                save_final_flat_result(label_map, sample_dir)
+                save_final_flat_result(label_map, vis_dir / f"{sample['name'][0]}_postprocess")
 
     print(f"Samples: {count}")
     print(f"Interior MSE: {mse_interior / max(count, 1):.6f}")
