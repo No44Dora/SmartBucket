@@ -138,6 +138,16 @@ def read_line_mask(lineart_path: Path, gray_threshold: int = 55) -> np.ndarray:
     return binary == 0
 
 
+def ensure_line_mask_shape(line_mask: np.ndarray, image_shape: tuple[int, int, int], lineart_path: Path) -> np.ndarray:
+    expected_shape = image_shape[:2]
+    if line_mask.shape != expected_shape:
+        raise ValueError(
+            f"线稿尺寸与原图不一致: lineart={lineart_path} shape={line_mask.shape}, "
+            f"image shape={expected_shape}。请提供与输入图像同分辨率的线稿。"
+        )
+    return line_mask
+
+
 def quantize_colors_kmeans_sampled(
     image_rgb: np.ndarray,
     k: int,
@@ -299,7 +309,8 @@ def expand_regions_in_free_space(region_map: np.ndarray, line_mask: np.ndarray |
     kernel = np.ones((3, 3), dtype=np.uint8)
 
     while np.any(unassigned_mask):
-        expanded = cv2.dilate(labels, kernel, iterations=1)
+        # OpenCV morphology 不支持 int32(CV_32S) 输入，这里临时转为 float32 以保留 region ID。
+        expanded = cv2.dilate(labels.astype(np.float32), kernel, iterations=1).astype(labels.dtype, copy=False)
         candidates = unassigned_mask & (expanded > 0)
         if not np.any(candidates):
             break
@@ -397,7 +408,11 @@ def process_one_image(
     if cfg.ignore_line_pixels:
         lineart_path = resolve_lineart_path(path, lineart_input)
         if lineart_path is not None:
-            line_mask = read_line_mask(lineart_path, cfg.line_gray_threshold)
+            line_mask = ensure_line_mask_shape(
+                read_line_mask(lineart_path, cfg.line_gray_threshold),
+                image_rgb.shape,
+                lineart_path,
+            )
         else:
             line_mask = estimate_line_mask(image_rgb, cfg.line_gray_threshold)
     else:
@@ -493,6 +508,11 @@ def main() -> None:
     images = collect_images(args.input)
     if not images:
         raise ValueError(f"未在输入路径找到可处理图像: {args.input}")
+
+    if args.lineart_input is not None and args.lineart_input.is_file() and len(images) > 1:
+        raise ValueError(
+            "当输入为多图/目录时，--lineart-input 不能是单个文件；请提供线稿目录并按文件名一一对应。"
+        )
 
     vis_set: set[Path] = set()
     if args.save_vis and args.vis_max_images > 0:
