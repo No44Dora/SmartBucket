@@ -77,25 +77,8 @@ def build_interior_map(region_map: np.ndarray) -> np.ndarray:
     edges_dilated = cv2.dilate(edges, kernel, iterations=1)
     edges_closed = cv2.morphologyEx(edges_dilated, cv2.MORPH_CLOSE, kernel)
 
-    # 以边缘为障碍，在非边缘区域做 flood fill，得到 outside。
-    non_edge = (edges_closed == 0).astype(np.uint8)
-    flood_src = (non_edge * 255).astype(np.uint8)
-    flood_mask = np.zeros((h + 2, w + 2), dtype=np.uint8)
-
-    border_seeds: list[tuple[int, int]] = []
-    for x in range(w):
-        border_seeds.append((x, 0))
-        border_seeds.append((x, h - 1))
-    for y in range(h):
-        border_seeds.append((0, y))
-        border_seeds.append((w - 1, y))
-
-    for x, y in border_seeds:
-        if flood_src[y, x] == 255:
-            cv2.floodFill(flood_src, flood_mask, (x, y), 128)
-
-    outside = flood_src == 128
-    interior = ((~outside) & (edges_closed == 0)).astype(np.uint8)
+    # 按要求不再区分 outside / inside：所有非边缘像素都作为上色区域。
+    interior = (edges_closed == 0).astype(np.uint8)
     return interior
 
 
