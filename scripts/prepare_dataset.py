@@ -38,6 +38,7 @@ def parse_args() -> argparse.Namespace:
         description="将彩色平涂图像转换为区域实例标签（region ID map）。"
     )
     parser.add_argument("--input", type=Path, required=True, help="输入图像路径或目录")
+    parser.add_argument("--lineart-input", type=Path, default=None, help="线稿图像目录（与输入图像同名匹配）")
     parser.add_argument("--output", type=Path, required=True, help="输出目录")
     parser.add_argument("--num-clusters", type=int, default=24, help="颜色聚类数")
     parser.add_argument("--sample-size", type=int, default=20000, help="KMeans 训练采样像素数")
@@ -105,6 +106,36 @@ def smooth_before_clustering(image_rgb: np.ndarray, cfg: PreprocessConfig) -> np
 def estimate_line_mask(image_rgb: np.ndarray, gray_threshold: int = 55) -> np.ndarray:
     gray = cv2.cvtColor(image_rgb, cv2.COLOR_RGB2GRAY)
     return gray < gray_threshold
+
+
+def resolve_lineart_path(image_path: Path, lineart_input: Path | None) -> Path | None:
+    if lineart_input is None:
+        return None
+    if lineart_input.is_file():
+        return lineart_input
+    candidates = [
+        lineart_input / image_path.name,
+        lineart_input / f"{image_path.stem}.png",
+        lineart_input / f"{image_path.stem}.jpg",
+        lineart_input / f"{image_path.stem}.jpeg",
+        lineart_input / f"{image_path.stem}.bmp",
+        lineart_input / f"{image_path.stem}.webp",
+    ]
+    for c in candidates:
+        if c.exists():
+            return c
+    return None
+
+
+def read_line_mask(lineart_path: Path, gray_threshold: int = 55) -> np.ndarray:
+    lineart = cv2.imread(str(lineart_path), cv2.IMREAD_GRAYSCALE)
+    if lineart is None:
+        raise ValueError(f"无法读取线稿图像: {lineart_path}")
+    blur = cv2.GaussianBlur(lineart, (3, 3), 0)
+    otsu_thr, _ = cv2.threshold(blur, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    threshold = int(min(gray_threshold, otsu_thr))
+    _, binary = cv2.threshold(blur, threshold, 255, cv2.THRESH_BINARY)
+    return binary == 0
 
 
 def quantize_colors_kmeans_sampled(
@@ -250,6 +281,37 @@ def build_region_instances(
     return region_map
 
 
+def expand_regions_in_free_space(region_map: np.ndarray, line_mask: np.ndarray | None) -> np.ndarray:
+    """将 free space 中未分配像素按最近区域进行扩张分配（不跨线条）。"""
+    if line_mask is None:
+        return region_map
+
+    free_space = ~line_mask
+    unassigned_mask = free_space & (region_map == 0)
+    if not np.any(unassigned_mask):
+        return region_map
+
+    labels = region_map.copy()
+    frontier = labels > 0
+    if not np.any(frontier):
+        return labels
+
+    kernel = np.ones((3, 3), dtype=np.uint8)
+
+    while np.any(unassigned_mask):
+        expanded = cv2.dilate(labels, kernel, iterations=1)
+        candidates = unassigned_mask & (expanded > 0)
+        if not np.any(candidates):
+            break
+        labels[candidates] = expanded[candidates]
+        frontier = candidates
+        unassigned_mask = free_space & (labels == 0)
+        if not np.any(frontier):
+            break
+
+    return labels
+
+
 def labels_to_color(labels: np.ndarray, palette: np.ndarray) -> np.ndarray:
     canvas = np.zeros((*labels.shape, 3), dtype=np.uint8)
     valid_mask = labels >= 0
@@ -322,6 +384,7 @@ def save_visualizations(
 
 def process_one_image(
     path: Path,
+    lineart_input: Path | None,
     output_dir: Path,
     cfg: PreprocessConfig,
     max_instances: int,
@@ -331,7 +394,14 @@ def process_one_image(
     image_rgb = read_color_image(path)
     image_for_cluster = smooth_before_clustering(image_rgb, cfg)
 
-    line_mask = estimate_line_mask(image_rgb, cfg.line_gray_threshold) if cfg.ignore_line_pixels else None
+    if cfg.ignore_line_pixels:
+        lineart_path = resolve_lineart_path(path, lineart_input)
+        if lineart_path is not None:
+            line_mask = read_line_mask(lineart_path, cfg.line_gray_threshold)
+        else:
+            line_mask = estimate_line_mask(image_rgb, cfg.line_gray_threshold)
+    else:
+        line_mask = None
     quantized_rgb, cluster_labels, _centers_rgb, centers_lab, sampled_count = quantize_colors_kmeans_sampled(
         image_for_cluster,
         cfg.num_clusters,
@@ -350,6 +420,7 @@ def process_one_image(
 
     merged_rgb = labels_to_color(merged_labels, merged_palette)
     region_map = build_region_instances(merged_labels, cfg.min_region_area, cfg.morph_kernel_size)
+    region_map = expand_regions_in_free_space(region_map, line_mask)
 
     if int(region_map.max()) > int(np.iinfo(np.uint16).max):
         raise ValueError(f"region id 超过 uint16 上限: {int(region_map.max())}")
@@ -434,6 +505,7 @@ def main() -> None:
                 ex.submit(
                     process_one_image,
                     path=img_path,
+                    lineart_input=args.lineart_input,
                     output_dir=args.output,
                     cfg=cfg,
                     max_instances=args.max_vis_instances,
@@ -447,6 +519,7 @@ def main() -> None:
         for img_path in images:
             process_one_image(
                 path=img_path,
+                lineart_input=args.lineart_input,
                 output_dir=args.output,
                 cfg=cfg,
                 max_instances=args.max_vis_instances,
